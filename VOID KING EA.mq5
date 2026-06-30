@@ -117,7 +117,6 @@ void DrawDashboard()
       ObjectSetInteger(0, bg_name, OBJPROP_BGCOLOR, Dashboard_BackColor);
       ObjectSetInteger(0, bg_name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
       ObjectSetInteger(0, bg_name, OBJPROP_BORDER_COLOR, clrGold);
-      ObjectSetInteger(0, bg_name, OBJPROP_BORDER_WIDTH, 2);
      }
    
    // Title
@@ -156,8 +155,8 @@ void DrawDashboard()
    DrawLabel("VK_Bid", 15, 162, StringFormat("Bid: %.5f | Ask: %.5f", SymbolInfoDouble(Symbol(), SYMBOL_BID), SymbolInfoDouble(Symbol(), SYMBOL_ASK)), Dashboard_TextColor, Dashboard_FontSize - 1);
    
    // Status
-   string status = (ExtExpert.Enabled()) ? "RUNNING ▶" : "STOPPED ⏹";
-   color status_color = (ExtExpert.Enabled()) ? clrLimeGreen : clrOrange;
+   string status = ExtExpert.IsEnabled() ? "RUNNING ▶" : "STOPPED ⏹";
+   color status_color = ExtExpert.IsEnabled() ? clrLimeGreen : clrOrange;
    DrawLabel("VK_Status", 16, 172, status, status_color, Dashboard_FontSize);
   }
 
@@ -186,7 +185,7 @@ void UpdateDashboardData()
   {
    dashboard_data.account_balance = AccountInfoDouble(ACCOUNT_BALANCE);
    dashboard_data.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   dashboard_data.free_margin = AccountInfoDouble(ACCOUNT_FREEMARGIN);
+   dashboard_data.free_margin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    dashboard_data.total_profit = 0;
    dashboard_data.total_trades = 0;
    dashboard_data.winning_trades = 0;
@@ -207,7 +206,8 @@ void UpdateDashboardData()
       double deal_profit = HistoryDealGetDouble(deal_ticket, DEAL_PROFIT);
       double deal_commission = HistoryDealGetDouble(deal_ticket, DEAL_COMMISSION);
       
-      if(deal_type == DEAL_BUY || deal_type == DEAL_SELL)
+      // Check if it's a buy or sell deal (entry)
+      if(deal_type == DEAL_TYPE_BUY || deal_type == DEAL_TYPE_SELL)
         {
          dashboard_data.total_trades++;
          dashboard_data.total_profit += deal_profit + deal_commission;
@@ -251,9 +251,14 @@ int GetSignalType()
   {
    // Determine signal direction based on indicator values
    // BUY = 1, SELL = -1, NO SIGNAL = 0
-   double stoch_main = iStochastic(Symbol(), Period(), Signal_Stoch_PeriodK, Signal_Stoch_PeriodD, Signal_Stoch_PeriodSlow, Signal_Stoch_Applied, MODE_MAIN, 0);
-   double envelope_upper = iEnvelopes(Symbol(), Period(), Signal_Envelopes_PeriodMA, Signal_Envelopes_Shift, Signal_Envelopes_Method, Signal_Envelopes_Applied, Signal_Envelopes_Deviation, MODE_UPPER, 0);
-   double envelope_lower = iEnvelopes(Symbol(), Period(), Signal_Envelopes_PeriodMA, Signal_Envelopes_Shift, Signal_Envelopes_Method, Signal_Envelopes_Applied, Signal_Envelopes_Deviation, MODE_LOWER, 0);
+   int stoch_handle = iStochastic(Symbol(), Period(), Signal_Stoch_PeriodK, Signal_Stoch_PeriodD, Signal_Stoch_PeriodSlow, Signal_Stoch_Applied);
+   double stoch_main;
+   CopyBuffer(stoch_handle, 0, 0, 1, &stoch_main);
+   
+   int env_handle = iEnvelopes(Symbol(), Period(), Signal_Envelopes_PeriodMA, Signal_Envelopes_Shift, Signal_Envelopes_Method, Signal_Envelopes_Applied, Signal_Envelopes_Deviation);
+   double envelope_upper, envelope_lower;
+   CopyBuffer(env_handle, 1, 0, 1, &envelope_upper);
+   CopyBuffer(env_handle, 2, 0, 1, &envelope_lower);
    
    double close_price = iClose(Symbol(), Period(), 0);
    
@@ -274,10 +279,25 @@ void CleanDashboard()
    for(int i = 0; i < 20; i++)
      {
       ObjectDelete(0, "VK_" + IntegerToString(i));
-      ObjectDelete(0, "VK_" + EnumToString(Period()));
-      ObjectDelete(0, "VK_Title");
-      ObjectDelete(0, "VK_Dashboard_BG");
      }
+   ObjectDelete(0, "VK_Title");
+   ObjectDelete(0, "VK_Dashboard_BG");
+   ObjectDelete(0, "VK_Sep1");
+   ObjectDelete(0, "VK_Sep2");
+   ObjectDelete(0, "VK_Sep3");
+   ObjectDelete(0, "VK_Sep4");
+   ObjectDelete(0, "VK_Account");
+   ObjectDelete(0, "VK_Equity");
+   ObjectDelete(0, "VK_Margin");
+   ObjectDelete(0, "VK_TotalTrades");
+   ObjectDelete(0, "VK_Winning");
+   ObjectDelete(0, "VK_WinRate");
+   ObjectDelete(0, "VK_Profit");
+   ObjectDelete(0, "VK_Signal");
+   ObjectDelete(0, "VK_SignalTime");
+   ObjectDelete(0, "VK_Symbol");
+   ObjectDelete(0, "VK_Bid");
+   ObjectDelete(0, "VK_Status");
   }
 
 //+------------------------------------------------------------------+
