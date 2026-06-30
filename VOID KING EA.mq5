@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, CYCLONE POSH"
 #property link      "https://www.mql5.com"
-#property version   "1.02"
+#property version   "1.03"
 //+------------------------------------------------------------------+
 //| Include                                                          |
 //+------------------------------------------------------------------+
@@ -30,8 +30,8 @@ bool                     Expert_EveryTick             = false;                  
 input int                Signal_ThresholdOpen         = 25;                     // Signal threshold value to open [0...100]
 input int                Signal_ThresholdClose        = 15;                     // Signal threshold value to close [0...100]
 input double             Signal_PriceLevel            = 0.0;                    // Price level to execute a deal
-input double             Signal_StopLevel             = 500.0;                  // Stop Loss level (in points)
-input double             Signal_TakeLevel             = 750.0;                  // Take Profit level (in points)
+input double             Signal_StopLevel             = 1500.0;                 // Stop Loss level (in points)
+input double             Signal_TakeLevel             = 1750.0;                 // Take Profit level (in points)
 input int                Signal_Expiration            = 4;                      // Expiration of pending orders (in bars)
 
 //--- inputs for Stochastic signal
@@ -64,241 +64,293 @@ input double             Trailing_ParabolicSAR_Maximum= 0.2;                    
 input double             Money_FixLot_Percent         = 10.0;                   // Percent of account
 input double             Money_FixLot_Lots            = 0.01;                   // Fixed volume
 
-//--- Dashboard Settings
+//--- SMC Settings
+input bool               Use_SMC                      = true;                   // Enable SMC (Smart Money Concepts)
+input int                SMC_LookbackPeriod           = 20;                     // SMC Lookback period for structure
+input double             SMC_BreakoutThreshold        = 1.5;                    // SMC Breakout threshold (ATR multiplier)
+input bool               Show_SMC_Levels              = true;                   // Show SMC levels on chart
 input bool               Show_Dashboard               = true;                   // Show Trading Dashboard
-input ENUM_BASE_CORNER   Dashboard_Corner             = CORNER_RIGHT_UPPER;     // Dashboard position
-input int                Dashboard_OffsetX             = 10;                    // Dashboard X offset
-input int                Dashboard_OffsetY             = 30;                    // Dashboard Y offset
-input color              Dashboard_BackColor          = clrDarkBlue;            // Dashboard background
-input color              Dashboard_TextColor          = clrWhiteSmoke;          // Dashboard text color
-input int                Dashboard_FontSize           = 9;                      // Font size
 
 //+------------------------------------------------------------------+
-//| Global expert object                                             |
+//| SMC Structure Detection Class                                    |
 //+------------------------------------------------------------------+
-CExpert ExtExpert;
-
-//--- Dashboard variables
-struct DashboardInfo {
-   int total_trades;
-   int winning_trades;
-   int losing_trades;
-   double total_profit;
-   double account_balance;
-   double account_equity;
-   double free_margin;
-   string last_trade_signal;
-   datetime last_trade_time;
-   double win_rate;
-};
-
-DashboardInfo dashboard_data;
-
-//+------------------------------------------------------------------+
-//| Dashboard Drawing Function                                       |
-//+------------------------------------------------------------------+
-void DrawDashboard()
+class CSMC
   {
-   if(!Show_Dashboard) return;
-   
-   // Update dashboard data
-   UpdateDashboardData();
-   
-   // Create background rectangle
-   string bg_name = "VK_Dashboard_BG";
-   if(ObjectFind(0, bg_name) == -1)
+private:
+   int               m_lookback;
+   double            m_swing_high;
+   double            m_swing_low;
+   int               m_swing_high_bar;
+   int               m_swing_low_bar;
+   double            m_resistance;
+   double            m_support;
+   bool              m_bullish_structure;
+   bool              m_bearish_structure;
+
+public:
+                     CSMC(int lookback = 20) : m_lookback(lookback), m_swing_high(0), m_swing_low(0), 
+                           m_swing_high_bar(0), m_swing_low_bar(0), m_resistance(0), m_support(0),
+                           m_bullish_structure(false), m_bearish_structure(false) {}
+                    ~CSMC(void) {}
+
+   void              Update(void)
      {
-      ObjectCreate(0, bg_name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, bg_name, OBJPROP_CORNER, Dashboard_Corner);
-      ObjectSetInteger(0, bg_name, OBJPROP_XDISTANCE, Dashboard_OffsetX);
-      ObjectSetInteger(0, bg_name, OBJPROP_YDISTANCE, Dashboard_OffsetY);
-      ObjectSetInteger(0, bg_name, OBJPROP_XSIZE, 280);
-      ObjectSetInteger(0, bg_name, OBJPROP_YSIZE, 280);
-      ObjectSetInteger(0, bg_name, OBJPROP_BGCOLOR, Dashboard_BackColor);
-      ObjectSetInteger(0, bg_name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
-      ObjectSetInteger(0, bg_name, OBJPROP_BORDER_COLOR, clrGold);
+      // Detect swing highs and lows
+      DetectSwings();
+      
+      // Detect break of structure
+      DetectStructureBreak();
      }
-   
-   // Title
-   DrawLabel("VK_Title", 0, 12, "◆ VOID KING EA - Dashboard ◆", Dashboard_TextColor, Dashboard_FontSize + 1);
-   
-   // Separator
-   DrawLabel("VK_Sep1", 1, 22, "════════════════════════", clrGold, Dashboard_FontSize - 1);
-   
-   // Account Info
-   DrawLabel("VK_Account", 2, 32, StringFormat("Account: %.2f USD", dashboard_data.account_balance), Dashboard_TextColor, Dashboard_FontSize);
-   DrawLabel("VK_Equity", 3, 42, StringFormat("Equity: %.2f USD", dashboard_data.account_equity), clrLimeGreen, Dashboard_FontSize);
-   DrawLabel("VK_Margin", 4, 52, StringFormat("Free Margin: %.2f", dashboard_data.free_margin), clrCyan, Dashboard_FontSize);
-   
-   // Separator
-   DrawLabel("VK_Sep2", 5, 62, "════════════════════════", clrGold, Dashboard_FontSize - 1);
-   
-   // Trade Statistics
-   color win_color = (dashboard_data.win_rate >= 50) ? clrLimeGreen : clrOrange;
-   DrawLabel("VK_TotalTrades", 6, 72, StringFormat("Total Trades: %d", dashboard_data.total_trades), Dashboard_TextColor, Dashboard_FontSize);
-   DrawLabel("VK_Winning", 7, 82, StringFormat("Win: %d | Loss: %d", dashboard_data.winning_trades, dashboard_data.losing_trades), win_color, Dashboard_FontSize);
-   DrawLabel("VK_WinRate", 8, 92, StringFormat("Win Rate: %.2f%%", dashboard_data.win_rate), win_color, Dashboard_FontSize);
-   DrawLabel("VK_Profit", 9, 102, StringFormat("P/L: %.2f USD", dashboard_data.total_profit), (dashboard_data.total_profit >= 0) ? clrLimeGreen : clrOrange, Dashboard_FontSize);
-   
-   // Separator
-   DrawLabel("VK_Sep3", 10, 112, "════════════════════════", clrGold, Dashboard_FontSize - 1);
-   
-   // Signal Info
-   DrawLabel("VK_Signal", 11, 122, StringFormat("Last Signal: %s", dashboard_data.last_trade_signal), clrYellow, Dashboard_FontSize);
-   DrawLabel("VK_SignalTime", 12, 132, TimeToString(dashboard_data.last_trade_time, TIME_DATE|TIME_MINUTES), clrYellow, Dashboard_FontSize - 1);
-   
-   // Separator
-   DrawLabel("VK_Sep4", 13, 142, "════════════════════════", clrGold, Dashboard_FontSize - 1);
-   
-   // Market Info
-   DrawLabel("VK_Symbol", 14, 152, StringFormat("Symbol: %s | TF: %s", Symbol(), EnumToString(Period())), Dashboard_TextColor, Dashboard_FontSize - 1);
-   DrawLabel("VK_Bid", 15, 162, StringFormat("Bid: %.5f | Ask: %.5f", SymbolInfoDouble(Symbol(), SYMBOL_BID), SymbolInfoDouble(Symbol(), SYMBOL_ASK)), Dashboard_TextColor, Dashboard_FontSize - 1);
-   
-   // Status
-   string status = ExtExpert.IsEnabled() ? "RUNNING ▶" : "STOPPED ⏹";
-   color status_color = ExtExpert.IsEnabled() ? clrLimeGreen : clrOrange;
-   DrawLabel("VK_Status", 16, 172, status, status_color, Dashboard_FontSize);
-  }
 
-//+------------------------------------------------------------------+
-//| Helper function to draw labels                                   |
-//+------------------------------------------------------------------+
-void DrawLabel(string name, int row, int y_offset, string text, color text_color, int font_size)
-  {
-   if(ObjectFind(0, name) == -1)
+   void              DetectSwings(void)
      {
-      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
-     }
-   
-   ObjectSetInteger(0, name, OBJPROP_CORNER, Dashboard_Corner);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, Dashboard_OffsetX + 10);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, Dashboard_OffsetY + y_offset);
-   ObjectSetString(0, name, OBJPROP_TEXT, text);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, text_color);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, font_size);
-  }
-
-//+------------------------------------------------------------------+
-//| Update Dashboard Data Function                                   |
-//+------------------------------------------------------------------+
-void UpdateDashboardData()
-  {
-   dashboard_data.account_balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   dashboard_data.account_equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   dashboard_data.free_margin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-   dashboard_data.total_profit = 0;
-   dashboard_data.total_trades = 0;
-   dashboard_data.winning_trades = 0;
-   dashboard_data.losing_trades = 0;
-   dashboard_data.win_rate = 0;
-   
-   // Count trades from order history
-   int total_deals = HistoryDealsTotal();
-   for(int i = 0; i < total_deals; i++)
-     {
-      ulong deal_ticket = HistoryDealGetTicket(i);
-      if(deal_ticket <= 0) continue;
+      m_swing_high = iHigh(Symbol(), Period(), 0);
+      m_swing_low = iLow(Symbol(), Period(), 0);
       
-      ulong deal_magic = HistoryDealGetInteger(deal_ticket, DEAL_MAGIC);
-      if(deal_magic != Expert_MagicNumber) continue;
-      
-      ENUM_DEAL_TYPE deal_type = (ENUM_DEAL_TYPE)HistoryDealGetInteger(deal_ticket, DEAL_TYPE);
-      double deal_profit = HistoryDealGetDouble(deal_ticket, DEAL_PROFIT);
-      double deal_commission = HistoryDealGetDouble(deal_ticket, DEAL_COMMISSION);
-      
-      // Check if it's a buy or sell deal (entry)
-      if(deal_type == DEAL_TYPE_BUY || deal_type == DEAL_TYPE_SELL)
+      for(int i = 1; i < m_lookback; i++)
         {
-         dashboard_data.total_trades++;
-         dashboard_data.total_profit += deal_profit + deal_commission;
+         double high = iHigh(Symbol(), Period(), i);
+         double low = iLow(Symbol(), Period(), i);
          
-         if(deal_profit > 0)
-            dashboard_data.winning_trades++;
-         else if(deal_profit < 0)
-            dashboard_data.losing_trades++;
+         if(high > m_swing_high)
+           {
+            m_swing_high = high;
+            m_swing_high_bar = i;
+           }
+         if(low < m_swing_low)
+           {
+            m_swing_low = low;
+            m_swing_low_bar = i;
+           }
+        }
+      
+      m_resistance = m_swing_high;
+      m_support = m_swing_low;
+     }
+
+   void              DetectStructureBreak(void)
+     {
+      double close = iClose(Symbol(), Period(), 0);
+      double prev_close = iClose(Symbol(), Period(), 1);
+      
+      // Bullish structure break: price closes above previous resistance
+      if(close > m_resistance && prev_close <= m_resistance)
+        {
+         m_bullish_structure = true;
+         m_bearish_structure = false;
+        }
+      // Bearish structure break: price closes below previous support
+      else if(close < m_support && prev_close >= m_support)
+        {
+         m_bearish_structure = true;
+         m_bullish_structure = false;
+        }
+      else
+        {
+         m_bullish_structure = false;
+         m_bearish_structure = false;
         }
      }
-   
-   if(dashboard_data.total_trades > 0)
-      dashboard_data.win_rate = (double)dashboard_data.winning_trades / dashboard_data.total_trades * 100;
-   
-   dashboard_data.last_trade_signal = "READY";
-   dashboard_data.last_trade_time = TimeCurrent();
-  }
+
+   double            GetResistance(void) const { return m_resistance; }
+   double            GetSupport(void) const { return m_support; }
+   bool              IsBullishStructure(void) const { return m_bullish_structure; }
+   bool              IsBearishStructure(void) const { return m_bearish_structure; }
+   int               GetSwingHighBar(void) const { return m_swing_high_bar; }
+   int               GetSwingLowBar(void) const { return m_swing_low_bar; }
+  };
 
 //+------------------------------------------------------------------+
-//| Create Trade Comment Function                                    |
+//| Dashboard Panel Class                                            |
 //+------------------------------------------------------------------+
-string CreateTradeComment(int signal_type)
+class CDashboard
   {
-   string comment = "VOID KING EA v1.02 | ";
-   comment += "Magic:" + IntegerToString(Expert_MagicNumber) + " | ";
-   comment += "Signal:" + (signal_type > 0 ? "BUY" : "SELL") + " | ";
-   comment += "Symbol:" + Symbol() + " | ";
-   comment += "TF:" + EnumToString(Period()) + " | ";
-   comment += "Time:" + TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES) + " | ";
-   comment += "Threshold:" + IntegerToString(Signal_ThresholdOpen) + " | ";
-   comment += "SL:" + DoubleToString(Signal_StopLevel, 0) + "pts | ";
-   comment += "TP:" + DoubleToString(Signal_TakeLevel, 0) + "pts";
-   
-   return comment;
-  }
+private:
+   string            m_prefix;
+   int               m_x;
+   int               m_y;
+   int               m_width;
+   int               m_height;
+   color             m_bg_color;
+   color             m_border_color;
+   color             m_text_color;
+   color             m_title_color;
+   int               m_font_size;
+   string            m_font_name;
 
-//+------------------------------------------------------------------+
-//| Get Signal Type Function                                         |
-//+------------------------------------------------------------------+
-int GetSignalType()
-  {
-   // Determine signal direction based on indicator values
-   // BUY = 1, SELL = -1, NO SIGNAL = 0
-   int stoch_handle = iStochastic(Symbol(), Period(), Signal_Stoch_PeriodK, Signal_Stoch_PeriodD, Signal_Stoch_PeriodSlow, Signal_Stoch_Applied);
-   double stoch_main;
-   CopyBuffer(stoch_handle, 0, 0, 1, &stoch_main);
-   
-   int env_handle = iEnvelopes(Symbol(), Period(), Signal_Envelopes_PeriodMA, Signal_Envelopes_Shift, Signal_Envelopes_Method, Signal_Envelopes_Applied, Signal_Envelopes_Deviation);
-   double envelope_upper, envelope_lower;
-   CopyBuffer(env_handle, 1, 0, 1, &envelope_upper);
-   CopyBuffer(env_handle, 2, 0, 1, &envelope_lower);
-   
-   double close_price = iClose(Symbol(), Period(), 0);
-   
-   // Simple signal logic
-   if(stoch_main < 20 && close_price < envelope_lower)
-      return 1;  // BUY signal
-   else if(stoch_main > 80 && close_price > envelope_upper)
-      return -1; // SELL signal
-   
-   return 0;  // No signal
-  }
-
-//+------------------------------------------------------------------+
-//| Clean Dashboard Function                                         |
-//+------------------------------------------------------------------+
-void CleanDashboard()
-  {
-   for(int i = 0; i < 20; i++)
+   void              CreateObject(string name, ENUM_OBJECT type)
      {
-      ObjectDelete(0, "VK_" + IntegerToString(i));
+      if(ObjectFind(0, name) < 0)
+        {
+         ObjectCreate(0, name, type, 0, 0, 0);
+         ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(0, name, OBJPROP_SELECTED, false);
+         ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+         ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+        }
      }
-   ObjectDelete(0, "VK_Title");
-   ObjectDelete(0, "VK_Dashboard_BG");
-   ObjectDelete(0, "VK_Sep1");
-   ObjectDelete(0, "VK_Sep2");
-   ObjectDelete(0, "VK_Sep3");
-   ObjectDelete(0, "VK_Sep4");
-   ObjectDelete(0, "VK_Account");
-   ObjectDelete(0, "VK_Equity");
-   ObjectDelete(0, "VK_Margin");
-   ObjectDelete(0, "VK_TotalTrades");
-   ObjectDelete(0, "VK_Winning");
-   ObjectDelete(0, "VK_WinRate");
-   ObjectDelete(0, "VK_Profit");
-   ObjectDelete(0, "VK_Signal");
-   ObjectDelete(0, "VK_SignalTime");
-   ObjectDelete(0, "VK_Symbol");
-   ObjectDelete(0, "VK_Bid");
-   ObjectDelete(0, "VK_Status");
-  }
+
+public:
+                     CDashboard(void)
+     {
+      m_prefix       = "VK_DB_";
+      m_x            = 15;
+      m_y            = 15;
+      m_width        = 320;
+      m_height       = 200;
+      m_bg_color     = C'20,20,20';       // Dark charcoal background
+      m_border_color = C'64,64,64';       // Slate gray border
+      m_text_color   = C'210,210,210';    // Soft white text
+      m_title_color  = C'0,229,188';      // Neon Teal title
+      m_font_size    = 8;
+      m_font_name    = "Consolas";        // Monospace text
+     }
+                    ~CDashboard(void) { Destroy(); }
+
+   void              Create(void)
+     {
+      string bg_name = m_prefix + "BG";
+      CreateObject(bg_name, OBJ_RECTANGLE_LABEL);
+      ObjectSetInteger(0, bg_name, OBJPROP_XSIZE, m_width);
+      ObjectSetInteger(0, bg_name, OBJPROP_YSIZE, m_height);
+      ObjectSetInteger(0, bg_name, OBJPROP_XDISTANCE, m_x);
+      ObjectSetInteger(0, bg_name, OBJPROP_YDISTANCE, m_y);
+      ObjectSetInteger(0, bg_name, OBJPROP_BGCOLOR, m_bg_color);
+      ObjectSetInteger(0, bg_name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+      ObjectSetInteger(0, bg_name, OBJPROP_COLOR, m_border_color);
+      
+      // Title
+      SetLabel("Title", "═══ VOID KING EA v1.03 ═══", m_x + 10, m_y + 8, m_title_color, 9, true);
+      
+      // Separator Line
+      SetLabel("Sep1", "─────────────────────────────", m_x + 10, m_y + 22, C'80,80,80', 8, false);
+     }
+
+   void              SetLabel(string name, string text, int x, int y, color clr, int font_size=8, bool bold=false)
+     {
+      string obj_name = m_prefix + name;
+      CreateObject(obj_name, OBJ_LABEL);
+      ObjectSetString(0, obj_name, OBJPROP_TEXT, text);
+      ObjectSetInteger(0, obj_name, OBJPROP_XDISTANCE, x);
+      ObjectSetInteger(0, obj_name, OBJPROP_YDISTANCE, y);
+      ObjectSetInteger(0, obj_name, OBJPROP_COLOR, clr);
+      ObjectSetInteger(0, obj_name, OBJPROP_FONTSIZE, font_size);
+      ObjectSetString(0, obj_name, OBJPROP_FONT, m_font_name + (bold ? " Bold" : ""));
+     }
+
+   void              Update(ulong magic, CSMC &smc)
+     {
+      if(!Show_Dashboard) return;
+      
+      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+      double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
+      double free_margin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+      double spread  = SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+      
+      int buy_pos = 0, sell_pos = 0;
+      double total_profit = 0.0;
+      
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+         if(PositionGetSymbol(i) == Symbol())
+           {
+            if(PositionGetInteger(POSITION_MAGIC) == magic)
+              {
+               long type = PositionGetInteger(POSITION_TYPE);
+               if(type == POSITION_TYPE_BUY) buy_pos++;
+               else if(type == POSITION_TYPE_SELL) sell_pos++;
+               total_profit += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+              }
+           }
+        }
+      
+      int row = m_y + 36;
+      int spacing = 14;
+      
+      SetLabel("Row_Bal", "Balance:  " + DoubleToString(balance, 2), m_x + 10, row, m_text_color, 8);
+      row += spacing;
+      SetLabel("Row_Eq", "Equity:   " + DoubleToString(equity, 2), m_x + 10, row, m_text_color, 8);
+      row += spacing;
+      SetLabel("Row_Margin", "F.Margin: " + DoubleToString(free_margin, 2), m_x + 10, row, m_text_color, 8);
+      row += spacing;
+      SetLabel("Row_Spread", "Spread:   " + DoubleToString(spread, 1) + " pts", m_x + 10, row, m_text_color, 8);
+      row += spacing;
+      SetLabel("Row_Positions", "Positions: " + IntegerToString(buy_pos) + "B | " + IntegerToString(sell_pos) + "S", m_x + 10, row, m_text_color, 8);
+      row += spacing + 2;
+      
+      color profit_clr = (total_profit > 0.01) ? C'0,255,127' : (total_profit < -0.01 ? C'255,99,71' : m_text_color);
+      string prof_sign = (total_profit > 0.01) ? "+" : "";
+      SetLabel("Row_Profit", "Net PnL: " + prof_sign + DoubleToString(total_profit, 2), m_x + 10, row, profit_clr, 8, true);
+      row += spacing + 4;
+      
+      // SMC Data
+      SetLabel("Sep2", "─────────────────────────────", m_x + 10, row, C'80,80,80', 8, false);
+      row += spacing;
+      SetLabel("Row_Res", "Resistance: " + DoubleToString(smc.GetResistance(), 5), m_x + 10, row, C'255,99,71', 8);
+      row += spacing;
+      SetLabel("Row_Sup", "Support:    " + DoubleToString(smc.GetSupport(), 5), m_x + 10, row, C'0,200,255', 8);
+      row += spacing;
+      
+      string smc_status = "SMC: ";
+      color smc_clr = m_text_color;
+      if(smc.IsBullishStructure())
+        {
+         smc_status += "↑ BULLISH";
+         smc_clr = C'0,255,127';
+        }
+      else if(smc.IsBearishStructure())
+        {
+         smc_status += "↓ BEARISH";
+         smc_clr = C'255,99,71';
+        }
+      else
+        {
+         smc_status += "NEUTRAL";
+         smc_clr = C'255,255,0';
+        }
+      SetLabel("Row_SMC", smc_status, m_x + 10, row, smc_clr, 8, true);
+      
+      ChartRedraw(0);
+     }
+
+   void              Destroy(void)
+     {
+      ObjectsDeleteAll(0, m_prefix);
+      ChartRedraw(0);
+     }
+  };
+
+//+------------------------------------------------------------------+
+//| Custom Expert Advisor subclass with custom trade comments        |
+//+------------------------------------------------------------------+
+class CVoidKingExpert : public CExpert
+  {
+public:
+   virtual bool      OpenLong(double price, double sl, double tp) override
+     {
+      if(price == EMPTY_VALUE) return(false);
+      double lot = LotOpenLong(price, sl);
+      if(lot == 0.0) return(false);
+      if(m_trade == NULL) return(false);
+      return(m_trade.Buy(lot, price, sl, tp, "VOID KING EA | BUY | Magic: " + IntegerToString((int)Expert_MagicNumber)));
+     }
+
+   virtual bool      OpenShort(double price, double sl, double tp) override
+     {
+      if(price == EMPTY_VALUE) return(false);
+      double lot = LotOpenShort(price, sl);
+      if(lot == 0.0) return(false);
+      if(m_trade == NULL) return(false);
+      return(m_trade.Sell(lot, price, sl, tp, "VOID KING EA | SELL | Magic: " + IntegerToString((int)Expert_MagicNumber)));
+     }
+  };
+
+//+------------------------------------------------------------------+
+//| Global expert, dashboard and SMC objects                         |
+//+------------------------------------------------------------------+
+CVoidKingExpert ExtExpert;
+CDashboard      G_Dashboard;
+CSMC            G_SMC(SMC_LookbackPeriod);
 
 //+------------------------------------------------------------------+
 //| Initialization function of the expert                            |
@@ -306,20 +358,18 @@ void CleanDashboard()
 int OnInit()
   {
 //--- Initializing expert
-   if(!ExtExpert.Init(Symbol(),Period(),Expert_EveryTick,Expert_MagicNumber))
+   if(!ExtExpert.Init(Symbol(), Period(), Expert_EveryTick, Expert_MagicNumber))
      {
-      //--- failed
-      printf(__FUNCTION__+": error initializing expert");
+      printf(__FUNCTION__ + ": error initializing expert");
       ExtExpert.Deinit();
       return(INIT_FAILED);
      }
 
 //--- Creating signal
-   CExpertSignal *signal=new CExpertSignal;
-   if(signal==NULL)
+   CExpertSignal *signal = new CExpertSignal;
+   if(signal == NULL)
      {
-      //--- failed
-      printf(__FUNCTION__+": error creating signal");
+      printf(__FUNCTION__ + ": error creating signal");
       ExtExpert.Deinit();
       return(INIT_FAILED);
      }
@@ -334,17 +384,15 @@ int OnInit()
    signal.Expiration(Signal_Expiration);
 
 //--- Creating Stochastic filter
-   CSignalStoch *filter0=new CSignalStoch;
-   if(filter0==NULL)
+   CSignalStoch *filter0 = new CSignalStoch;
+   if(filter0 == NULL)
      {
-      //--- failed
-      printf(__FUNCTION__+": error creating Stochastic filter");
+      printf(__FUNCTION__ + ": error creating Stochastic filter");
       ExtExpert.Deinit();
       return(INIT_FAILED);
      }
    signal.AddFilter(filter0);
 
-//--- Set Stochastic filter parameters
    filter0.PeriodK(Signal_Stoch_PeriodK);
    filter0.PeriodD(Signal_Stoch_PeriodD);
    filter0.PeriodSlow(Signal_Stoch_PeriodSlow);
@@ -352,17 +400,15 @@ int OnInit()
    filter0.Weight(Signal_Stoch_Weight);
 
 //--- Creating Envelopes filter
-   CSignalEnvelopes *filter1=new CSignalEnvelopes;
-   if(filter1==NULL)
+   CSignalEnvelopes *filter1 = new CSignalEnvelopes;
+   if(filter1 == NULL)
      {
-      //--- failed
-      printf(__FUNCTION__+": error creating Envelopes filter");
+      printf(__FUNCTION__ + ": error creating Envelopes filter");
       ExtExpert.Deinit();
       return(INIT_FAILED);
      }
    signal.AddFilter(filter1);
 
-//--- Set Envelopes filter parameters
    filter1.PeriodMA(Signal_Envelopes_PeriodMA);
    filter1.Shift(Signal_Envelopes_Shift);
    filter1.Method(Signal_Envelopes_Method);
@@ -371,17 +417,15 @@ int OnInit()
    filter1.Weight(Signal_Envelopes_Weight);
 
 //--- Creating Intraday Time Filter
-   CSignalITF *filter2=new CSignalITF;
-   if(filter2==NULL)
+   CSignalITF *filter2 = new CSignalITF;
+   if(filter2 == NULL)
      {
-      //--- failed
-      printf(__FUNCTION__+": error creating ITF filter");
+      printf(__FUNCTION__ + ": error creating ITF filter");
       ExtExpert.Deinit();
       return(INIT_FAILED);
      }
    signal.AddFilter(filter2);
 
-//--- Set ITF parameters
    filter2.GoodHourOfDay(Signal_ITF_GoodHourOfDay);
    filter2.BadHoursOfDay(Signal_ITF_BadHoursOfDay);
    filter2.GoodDayOfWeek(Signal_ITF_GoodDayOfWeek);
@@ -389,56 +433,47 @@ int OnInit()
    filter2.Weight(Signal_ITF_Weight);
 
 //--- Creation of trailing object
-   CTrailingPSAR *trailing=new CTrailingPSAR;
-   if(trailing==NULL)
+   CTrailingPSAR *trailing = new CTrailingPSAR;
+   if(trailing == NULL)
      {
-      //--- failed
-      printf(__FUNCTION__+": error creating trailing object");
+      printf(__FUNCTION__ + ": error creating trailing object");
       ExtExpert.Deinit();
       return(INIT_FAILED);
      }
 
-//--- Add trailing to expert (will be deleted automatically)
    if(!ExtExpert.InitTrailing(trailing))
      {
-      //--- failed
-      printf(__FUNCTION__+": error initializing trailing");
+      printf(__FUNCTION__ + ": error initializing trailing");
       ExtExpert.Deinit();
       return(INIT_FAILED);
      }
 
-//--- Set trailing parameters
    trailing.Step(Trailing_ParabolicSAR_Step);
    trailing.Maximum(Trailing_ParabolicSAR_Maximum);
 
 //--- Creation of money management object
-   CMoneyFixedLot *money=new CMoneyFixedLot;
-   if(money==NULL)
+   CMoneyFixedLot *money = new CMoneyFixedLot;
+   if(money == NULL)
      {
-      //--- failed
-      printf(__FUNCTION__+": error creating money management object");
+      printf(__FUNCTION__ + ": error creating money management object");
       ExtExpert.Deinit();
       return(INIT_FAILED);
      }
 
-//--- Add money to expert (will be deleted automatically)
    if(!ExtExpert.InitMoney(money))
      {
-      //--- failed
-      printf(__FUNCTION__+": error initializing money management");
+      printf(__FUNCTION__ + ": error initializing money management");
       ExtExpert.Deinit();
       return(INIT_FAILED);
      }
 
-//--- Set money management parameters
    money.Percent(Money_FixLot_Percent);
    money.Lots(Money_FixLot_Lots);
 
 //--- Check all trading objects parameters
    if(!ExtExpert.ValidationSettings())
      {
-      //--- failed
-      printf(__FUNCTION__+": validation failed");
+      printf(__FUNCTION__ + ": validation failed");
       ExtExpert.Deinit();
       return(INIT_FAILED);
      }
@@ -446,14 +481,14 @@ int OnInit()
 //--- Tuning of all necessary indicators
    if(!ExtExpert.InitIndicators())
      {
-      //--- failed
-      printf(__FUNCTION__+": error initializing indicators");
+      printf(__FUNCTION__ + ": error initializing indicators");
       ExtExpert.Deinit();
       return(INIT_FAILED);
      }
 
-//--- Initialize dashboard
-   DrawDashboard();
+//--- Initialize and draw Dashboard panel
+   G_Dashboard.Create();
+   EventSetTimer(1); // Set timer update interval to 1 second
 
 //--- ok
    return(INIT_SUCCEEDED);
@@ -465,7 +500,8 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    ExtExpert.Deinit();
-   CleanDashboard();
+   G_Dashboard.Destroy();
+   EventKillTimer();
   }
 
 //+------------------------------------------------------------------+
@@ -475,9 +511,12 @@ void OnTick()
   {
    ExtExpert.OnTick();
    
-   // Update dashboard every tick
-   if(Show_Dashboard)
-      DrawDashboard();
+   if(Use_SMC)
+     {
+      G_SMC.Update();
+     }
+   
+   G_Dashboard.Update(Expert_MagicNumber, G_SMC);
   }
 
 //+------------------------------------------------------------------+
@@ -486,13 +525,7 @@ void OnTick()
 void OnTrade()
   {
    ExtExpert.OnTrade();
-   
-   // Log trade information
-   int signal_type = GetSignalType();
-   string trade_comment = CreateTradeComment(signal_type);
-   
-   // Print to Journal
-   PrintFormat("Trade executed: %s", trade_comment);
+   G_Dashboard.Update(Expert_MagicNumber, G_SMC);
   }
 
 //+------------------------------------------------------------------+
@@ -501,6 +534,7 @@ void OnTrade()
 void OnTimer()
   {
    ExtExpert.OnTimer();
+   G_Dashboard.Update(Expert_MagicNumber, G_SMC);
   }
 
 //+------------------------------------------------------------------+
